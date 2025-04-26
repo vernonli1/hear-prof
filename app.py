@@ -4,6 +4,7 @@ import av
 import numpy as np
 import tempfile
 import os
+import time
 import soundfile as sf
 from groq import Groq
 from dotenv import load_dotenv
@@ -15,8 +16,11 @@ GROQ_API_KEY = os.getenv("GROQ_API_KEY")  # Ensure this environment variable is 
 MODEL = "whisper-large-v3-turbo"  # Options: whisper-large-v3, distil-whisper-large-v3-en
 client = Groq(api_key=GROQ_API_KEY)
 
-if "transcription" not in st.session_state:
-    st.session_state["transcription"] = ""
+if "transcription_sessions" not in st.session_state:
+    st.session_state["transcription_sessions"] = []
+
+if "current_session_transcription" not in st.session_state:
+    st.session_state["current_session_transcription"] = ""
 
 st.title("🎙️ Real-Time Transcription with Groq")
 st.markdown("Speak into your microphone, and see the transcription below:")
@@ -25,6 +29,7 @@ st.markdown("Speak into your microphone, and see the transcription below:")
 # Streamlit code
 class AudioProcessor(AudioProcessorBase):
     def __init__(self):
+        self.current_transcription = ""
         self.buffer = np.array([], dtype=np.float32)
 
     def recv(self, frame: av.AudioFrame) -> av.AudioFrame:
@@ -42,13 +47,10 @@ class AudioProcessor(AudioProcessorBase):
                 # Call the transcribe_audio function to process and transcribe
                 transcript = transcribe_audio(tmpfile_path)
 
-                print(transcript)
+                self.current_transcription += transcript
 
-                st.session_state['transcription'] += transcript
-                
 
                 # Force Streamlit to rerun and update the markdown
-                st.rerun()
 
             except Exception as e:
                 st.error(f"Transcription error: {e}")
@@ -85,15 +87,39 @@ def transcribe_audio(file_path: str, prompt: str = "") -> str:
         print(f"[ERROR] Groq Transcription failed: {e}")
         return "Error in transcription."
 
+
+
 # Start WebRTC streamer
-webrtc_streamer(
+webrtc_ctx = webrtc_streamer(
     key="transcriber",
     audio_processor_factory=AudioProcessor,
     media_stream_constraints={"audio": True, "video": False},
     async_processing=False,  # <-- Important! Process everything synchronously
 )
 
+transcription_display = st.empty()
+
+if webrtc_ctx and webrtc_ctx.state.playing:
+    # Setup a loop to update transcription while streaming
+    while True:
+        if webrtc_ctx.audio_processor:
+            new_transcription = webrtc_ctx.audio_processor.current_transcription
+            if new_transcription != st.session_state["current_session_transcription"]:
+                st.session_state["current_session_transcription"] = new_transcription
+
+                transcription_display.markdown(st.session_state["current_session_transcription"])
+                
+
+        time.sleep(1)  # <-- Poll every 1 second (adjust if you want faster updates)
+elif not webrtc_ctx.state.playing:
+    # When recording stops, push completed session to list
+    if st.session_state["current_session_transcription"]:
+        st.session_state["transcription_sessions"].append(
+            st.session_state["current_session_transcription"]
+        )
+        st.session_state["current_session_transcription"] = ""
+
 
 # Display the transcription with a markdown block that updates
 st.subheader("📝 Transcription")
-st.markdown(st.session_state["transcription"])
+st.markdown("<br>".join(st.session_state["transcription_sessions"]), unsafe_allow_html=True)
