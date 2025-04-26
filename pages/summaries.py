@@ -36,5 +36,5 @@ st.markdown(response.text)
 flashcards = model.generate_content(
     f"Create 5 flashcards (Q&A format) from this lecture:\n\n{lecture_text}"
 )
-print(flashcards.text)
+
 st.markdown(flashcards.text)

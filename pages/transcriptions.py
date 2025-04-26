@@ -8,8 +8,21 @@ import time
 import soundfile as sf
 from groq import Groq
 from dotenv import load_dotenv
+import pymongo
+import sys
 
 load_dotenv()
+
+# Database setup
+MONGO_CONNECTION = os.getenv("MONGO_CONNECTION")
+try:
+    client = pymongo.MongoClient(MONGO_CONNECTION)
+    db = client["materials"]     # choose your database
+    collection = db["transcripts"]  # choose your collection
+# return a friendly error if a URI error is thrown 
+except pymongo.errors.ConfigurationError:
+    print("An Invalid URI host error was received. Is your Atlas host name correct in your connection string?")
+    sys.exit(1)
 
 
 st.markdown("# Transcribe 🎈")
@@ -29,8 +42,15 @@ if "current_session_transcription" not in st.session_state:
 st.title("🎙️ Real-Time Transcription with Groq")
 st.markdown("Speak into your microphone, and see the transcription below:")
 
+def insert_document_into_mongo(doc):
+    try:
+        result = collection.insert_one(doc)
+        return f"Inserted with id {result.inserted_id}"
+    except Exception as e:
+        return f"Failed to insert: {e}"
 
-# Streamlit code
+
+# Recording functionality
 class AudioProcessor(AudioProcessorBase):
     def __init__(self):
         self.current_transcription = ""
@@ -127,3 +147,15 @@ elif not webrtc_ctx.state.playing:
 # Display the transcription with a markdown block that updates
 st.subheader("📝 Transcription")
 st.markdown("<br>".join(st.session_state["transcription_sessions"]), unsafe_allow_html=True)
+
+if st.button("Save Transcript to MongoDB"):
+    if st.session_state["transcription_sessions"]:
+        doc = {
+            "transcript": "\n".join(st.session_state["transcription_sessions"]).strip(),
+            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+        }
+        message = insert_document_into_mongo(doc)
+        if message.startswith("Inserted with id"):
+            st.success("Saved lesson transcript")
+    else:
+        st.warning("No transcript to save!")
