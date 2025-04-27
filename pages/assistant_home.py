@@ -17,8 +17,7 @@ import os
 load_dotenv()
 
 groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
-MODEL_NAME = "llama-3-70b-8192"
-
+MODEL_NAME = "llama-3.3-70b-versatile"
 
 # Inject custom CSS
 st.markdown("""
@@ -72,32 +71,35 @@ st.session_state["chosen_voice"] = voice_option
 st.session_state["input_device"] = input_device
 st.session_state["output_device"] = output_device
 
-# Assistant Status Indicator
+# Assistant Status
 if "assistant_running" not in st.session_state:
     st.session_state["assistant_running"] = False
-
-if st.session_state["assistant_running"]:
-    st.success("🟢 Assistant is Running...")
-else:
-    st.error("🔴 Assistant is Stopped.")
 
 # Launch / Terminate Assistant Buttons
 start_col, stop_col = st.columns(2)
 
-if not st.session_state["assistant_running"]:
-    if start_col.button("🚀 Launch Assistant"):
-        threading.Thread(
-            target=start_assistant,
-            args=(input_device, output_device),
-            daemon=True
-        ).start()
-        st.session_state["assistant_running"] = True
-        st.success("Assistant launched!")
+start_button_pressed = start_col.button("🚀 Launch Assistant")
+stop_button_pressed = stop_col.button("🛑 Terminate Assistant")
+
+if start_button_pressed and not st.session_state["assistant_running"]:
+    threading.Thread(
+        target=start_assistant,
+        args=(input_device, output_device),
+        daemon=True
+    ).start()
+    st.session_state["assistant_running"] = True
+    st.success("🟢 Assistant launched!")
+
+if stop_button_pressed and st.session_state["assistant_running"]:
+    stop_assistant()
+    st.session_state["assistant_running"] = False
+    st.warning("🔴 Assistant terminated.")
+
+# Assistant Status Indicator
+if st.session_state["assistant_running"]:
+    st.success("🟢 Assistant is Running...")
 else:
-    if stop_col.button("🛑 Terminate Assistant"):
-        stop_assistant()
-        st.session_state["assistant_running"] = False
-        st.warning("Assistant terminated.")
+    st.error("🔴 Assistant is Stopped.")
 
 st.divider()
 
@@ -186,8 +188,6 @@ if current_transcript_lines:
 
 else:
     st.warning("⚠️ No transcript available to save.")
-
-
 
 # Footer
 st.markdown("""
