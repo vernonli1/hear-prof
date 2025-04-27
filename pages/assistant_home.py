@@ -128,17 +128,54 @@ else:
 
 st.divider()
 
-# Save Transcript Button
-if st.button("💾 Save Transcript to MongoDB"):
+# Smart Lecture Name Generation
+def generate_title_from_transcript(transcript_text):
+    try:
+        excerpt = transcript_text[:300]
+        response = groq_client.chat.completions.create(
+            model=MODEL_NAME,
+            messages=[
+                {"role": "user", "content": f"Generate a short 3-6 word academic lecture title from this excerpt:\n\n{excerpt}"}
+            ]
+        )
+        title = response.choices[0].message.content.strip()
+        return title
+    except Exception as e:
+        print(f"[ERROR] Failed to generate title: {e}")
+        return "Untitled Lecture"
+
+# Save Transcript Section
+st.subheader("💾 Save Transcript")
+
+# Auto-fill suggestion based on first few words
+if current_transcript_lines:
+    first_sentence = current_transcript_lines[0]
+    suggested_name = " ".join(first_sentence.split()[:5]) + "..." if len(first_sentence.split()) > 5 else first_sentence
+else:
+    suggested_name = ""
+
+lecture_name = st.text_input("Enter Lecture Name 📝", value=suggested_name, placeholder="e.g., Introduction to Biology")
+
+
+if st.button("💾 Save Transcript"):
     if current_transcript_lines:
-        full_text = "\n".join(current_transcript_lines)
-        save_success = save_transcript_to_mongo(full_text)
-        if save_success:
-            st.success("✅ Transcript saved to MongoDB!")
-        else:
-            st.error("❌ Failed to save transcript.")
+        full_transcript_text = "\n".join(current_transcript_lines)
+
+        # Auto-generate a title suggestion
+        suggested_title = generate_title_from_transcript(full_transcript_text)
+
+        # Allow user to edit or accept the suggested title
+        lecture_name = st.text_input("📝 Lecture Name", value=suggested_title)
+
+        if st.button("✅ Confirm and Save"):
+            save_success = save_transcript_to_mongo(full_transcript_text, lecture_name)
+            if save_success:
+                st.success("✅ Transcript saved to MongoDB!")
+            else:
+                st.error("❌ Failed to save transcript.")
     else:
         st.warning("⚠️ No transcript available to save.")
+
 
 # Footer
 st.markdown("""

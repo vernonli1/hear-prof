@@ -141,12 +141,13 @@ def start_assistant(input_device_name, output_device_name):
 def stop_assistant():
     assistant_running_flag.clear()
 
-def save_transcript_to_mongo(transcript_text):
+def save_transcript_to_mongo(transcript_text, chosen_voice="Unknown", lecture_name="Unnamed"):
     try:
         doc = {
+            "name": lecture_name,
             "transcript": transcript_text.strip(),
             "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-            "voice": current_voice
+            "voice": chosen_voice
         }
         collection.insert_one(doc)
         return True
