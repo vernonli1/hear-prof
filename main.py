@@ -24,6 +24,7 @@ DEFAULT_SILENCE_THRESH_DBFS = -40  # fallback
 MIN_SILENCE_MS = 700               # ms
 URGENT_FLUSH_SECONDS = 10           # seconds
 MIN_AUDIO_DURATION_SECONDS = 1.5    # seconds
+MIN_ACCUMULATED_DURATION = 2.0      # seconds 🔥 (new)
 
 # ─── Globals ─────────────────────────────────────────────────────────────────────
 
@@ -107,26 +108,33 @@ def processing_loop():
             silence_detected = has_enough_silence(buffer)
             urgent_flush_needed = (current_time - first_chunk_time) >= URGENT_FLUSH_SECONDS
 
-            if (silence_detected or urgent_flush_needed) and buffer_duration_seconds >= MIN_AUDIO_DURATION_SECONDS:
-                chunk_to_process = bytes(buffer)
-                timestamps_to_process = timestamps.copy()
+            if silence_detected or urgent_flush_needed:
+                if buffer_duration_seconds >= MIN_AUDIO_DURATION_SECONDS:
+                    print(f"[INFO] Flushing buffer ({buffer_duration_seconds:.2f}s)...")
+                    flush_buffer(buffer, timestamps)
+                    first_chunk_time = None
 
-                buffer.clear()
-                timestamps.clear()
-                first_chunk_time = None
+                elif buffer_duration_seconds >= MIN_ACCUMULATED_DURATION:
+                    print(f"[INFO] Forcing flush of small accumulated buffer ({buffer_duration_seconds:.2f}s)...")
+                    flush_buffer(buffer, timestamps)
+                    first_chunk_time = None
 
-                threading.Thread(target=process_chunk, args=(chunk_to_process, timestamps_to_process)).start()
-
-            elif (silence_detected or urgent_flush_needed) and buffer_duration_seconds < MIN_AUDIO_DURATION_SECONDS:
-                print(f"[WARN] Discarded tiny buffer ({buffer_duration_seconds:.2f}s)")
-                buffer.clear()
-                timestamps.clear()
-                first_chunk_time = None
+                else:
+                    print(f"[INFO] Holding small buffer ({buffer_duration_seconds:.2f}s), waiting to accumulate more...")
 
         except queue.Empty:
             print("[WARN] No new mic chunks.")
 
 # ─── Chunk Processing ────────────────────────────────────────────────────────────
+
+def flush_buffer(buffer, timestamps):
+    chunk_to_process = bytes(buffer)
+    timestamps_to_process = timestamps.copy()
+
+    buffer.clear()
+    timestamps.clear()
+
+    threading.Thread(target=process_chunk, args=(chunk_to_process, timestamps_to_process)).start()
 
 def process_chunk(chunk_to_process, timestamps):
     print("\n🛠️  Processing audio chunk…")
@@ -190,12 +198,10 @@ def main():
 
     print(f"[INFO] Using input device index {MACBOOK_MIC_INDEX} for microphone '{mic_name}'")
 
-    # 🔥 Measure ambient noise and adapt silence threshold
     SILENCE_THRESH_DBFS = measure_ambient_noise(MACBOOK_MIC_INDEX)
 
     print(f"[INFO] Using adaptive silence threshold: {SILENCE_THRESH_DBFS:.2f} dBFS")
 
-    # Start threads
     capture_thread = threading.Thread(target=capture_loop, args=(MACBOOK_MIC_INDEX,), daemon=True)
     capture_thread.start()
 
