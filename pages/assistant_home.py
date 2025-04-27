@@ -10,6 +10,15 @@ from assistant_backend import (
     list_audio_devices
 )
 
+from groq import Groq
+from dotenv import load_dotenv
+import os
+
+load_dotenv()
+
+groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
+MODEL_NAME = "llama-3-70b-8192"
+
 
 # Inject custom CSS
 st.markdown("""
@@ -147,34 +156,37 @@ def generate_title_from_transcript(transcript_text):
 # Save Transcript Section
 st.subheader("💾 Save Transcript")
 
-# Auto-fill suggestion based on first few words
 if current_transcript_lines:
+    full_transcript_text = "\n".join(current_transcript_lines)
+
+    # Smart suggestion based on first few words
     first_sentence = current_transcript_lines[0]
-    suggested_name = " ".join(first_sentence.split()[:5]) + "..." if len(first_sentence.split()) > 5 else first_sentence
+    quick_suggested_name = " ".join(first_sentence.split()[:5]) + "..." if len(first_sentence.split()) > 5 else first_sentence
+
+    # Also generate a smarter title using Groq
+    if st.button("🎯 Suggest Better Lecture Title"):
+        smart_suggested_title = generate_title_from_transcript(full_transcript_text)
+        st.session_state["smart_suggested_title"] = smart_suggested_title
+
+    # Check if already suggested
+    suggested_name = st.session_state.get("smart_suggested_title", quick_suggested_name)
+
+    lecture_name = st.text_input("Enter Lecture Name 📝", value=suggested_name, placeholder="e.g., Introduction to Biology")
+
+    if st.button("💾 Final Save to MongoDB"):
+        save_success = save_transcript_to_mongo(
+            full_transcript_text,
+            chosen_voice=st.session_state.get("chosen_voice", "Unknown"),
+            lecture_name=lecture_name
+        )
+        if save_success:
+            st.success("✅ Transcript saved to MongoDB!")
+        else:
+            st.error("❌ Failed to save transcript.")
+
 else:
-    suggested_name = ""
+    st.warning("⚠️ No transcript available to save.")
 
-lecture_name = st.text_input("Enter Lecture Name 📝", value=suggested_name, placeholder="e.g., Introduction to Biology")
-
-
-if st.button("💾 Save Transcript"):
-    if current_transcript_lines:
-        full_transcript_text = "\n".join(current_transcript_lines)
-
-        # Auto-generate a title suggestion
-        suggested_title = generate_title_from_transcript(full_transcript_text)
-
-        # Allow user to edit or accept the suggested title
-        lecture_name = st.text_input("📝 Lecture Name", value=suggested_title)
-
-        if st.button("✅ Confirm and Save"):
-            save_success = save_transcript_to_mongo(full_transcript_text, lecture_name)
-            if save_success:
-                st.success("✅ Transcript saved to MongoDB!")
-            else:
-                st.error("❌ Failed to save transcript.")
-    else:
-        st.warning("⚠️ No transcript available to save.")
 
 
 # Footer

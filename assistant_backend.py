@@ -5,14 +5,19 @@ import queue
 import time
 import numpy as np
 import os
+import warnings
+warnings.filterwarnings("ignore", message="missing ScriptRunContext!")
 import pymongo
 import pyaudio
+import streamlit as st
 from dotenv import load_dotenv
 from groq import Groq
 from tts_generation import generate_audio
 from audio_capture import capture_audio
 from audio_playback import play_audio
 from list_audio_devices import list_devices
+from pydub import AudioSegment, silence
+import streamlit.runtime.scriptrunner as scriptrunner
 
 load_dotenv()
 
@@ -20,6 +25,12 @@ SAMPLE_RATE = 16000
 CHUNK_SIZE = 4096
 BYTES_PER_SAMPLE = 2
 CHANNELS = 1
+
+DEFAULT_SILENCE_THRESH_DBFS = -40
+MIN_SILENCE_MS = 700
+URGENT_FLUSH_SECONDS = 10
+MIN_AUDIO_DURATION_SECONDS = 1.5
+MIN_ACCUMULATED_DURATION = 2.0
 
 # Initialize clients
 client = Groq(api_key=os.getenv("GROQ_API_KEY"))
@@ -34,6 +45,13 @@ MODEL = "whisper-large-v3-turbo"
 current_transcript_lines = []
 audio_queue = queue.Queue()
 playback_queue = queue.Queue()
+
+# ElevenLabs Voice IDs Mapping
+ELEVENLABS_VOICE_IDS = {
+    "Voice 1": "21m00Tcm4TlvDq8ikWAM",    # Rachel
+    "Voice 2": "CYw3kZ02Hs0563khs1Fj",    # Dave
+    "Voice 3": "bVMeCyTHy58xNoL34h3p"     # Jeremy
+}
 
 # Configs
 speaking_threshold = 0.01  # RMS threshold for speech detection
@@ -69,6 +87,7 @@ def transcribe_audio_bytes(audio_bytes):
 
 # --- Threads ---
 def capture_loop(input_device_index=None):
+    scriptrunner.add_script_run_ctx(threading.current_thread())
     mic_stream = capture_audio(chunk=CHUNK_SIZE, rate=SAMPLE_RATE, input_device_index=input_device_index)
     for chunk in mic_stream:
         if not assistant_running_flag.is_set():
@@ -76,6 +95,7 @@ def capture_loop(input_device_index=None):
         audio_queue.put(chunk)
 
 def processing_loop():
+    scriptrunner.add_script_run_ctx(threading.current_thread())
     global current_transcript
     buffer = bytearray()
     last_flush = time.time()
@@ -92,10 +112,15 @@ def processing_loop():
             if duration_sec >= 2 or (time.time() - last_flush) > 5:
                 transcript = transcribe_audio_bytes(buffer)
                 if transcript:
-                    # current_transcript += transcript + "\n"
                     current_transcript_lines.append(transcript.strip())
                     try:
-                        tts_audio = generate_audio(transcript)
+                        # Fetch the current selected voice
+                        chosen_voice = st.session_state.get("chosen_voice", "Voice 1")
+                        voice_id = ELEVENLABS_VOICE_IDS.get(chosen_voice, ELEVENLABS_VOICE_IDS["Voice 1"])
+
+                        # Pass the voice_id into generate_audio
+                        tts_audio = generate_audio(transcript, voice_id=voice_id)
+
                         if tts_audio:
                             playback_queue.put(tts_audio)
                     except Exception as e:
@@ -108,6 +133,7 @@ def processing_loop():
             pass
 
 def playback_loop():
+    scriptrunner.add_script_run_ctx(threading.current_thread())
     while assistant_running_flag.is_set():
         try:
             audio_data = playback_queue.get(timeout=1)
