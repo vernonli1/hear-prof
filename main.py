@@ -20,25 +20,27 @@ CHUNK_SIZE = 4096
 BYTES_PER_SAMPLE = 2
 CHANNELS = 1
 
-DEFAULT_SILENCE_THRESH_DBFS = -40  # fallback
-MIN_SILENCE_MS = 700               # ms
-URGENT_FLUSH_SECONDS = 10           # seconds
-MIN_AUDIO_DURATION_SECONDS = 1.5    # seconds
-MIN_ACCUMULATED_DURATION = 2.0      # seconds 🔥 (new)
+DEFAULT_SILENCE_THRESH_DBFS = -40
+MIN_SILENCE_MS = 700
+URGENT_FLUSH_SECONDS = 10
+MIN_AUDIO_DURATION_SECONDS = 1.5
+MIN_ACCUMULATED_DURATION = 2.0
 
 # ─── Globals ─────────────────────────────────────────────────────────────────────
 
 audio_queue = queue.Queue()
 playback_queue = queue.Queue()
 
-SILENCE_THRESH_DBFS = DEFAULT_SILENCE_THRESH_DBFS  # will update dynamically
+SILENCE_THRESH_DBFS = DEFAULT_SILENCE_THRESH_DBFS
+INPUT_DEVICE_INDEX = None
+OUTPUT_DEVICE_NAME = None
 
-# ─── Utility: Silence Detector ───────────────────────────────────────────────────
+# ─── Utility Functions ───────────────────────────────────────────────────────────
 
 def has_enough_silence(audio_bytes, silence_thresh=SILENCE_THRESH_DBFS, silence_len=MIN_SILENCE_MS):
     audio = AudioSegment(
         data=audio_bytes,
-        sample_width=2,  # 16-bit PCM
+        sample_width=2,
         frame_rate=SAMPLE_RATE,
         channels=CHANNELS
     )
@@ -71,21 +73,18 @@ def measure_ambient_noise(input_device_index, sample_time=2):
 
     ambient_dbfs = audio.dBFS
     print(f"[INFO] Measured ambient noise level: {ambient_dbfs:.2f} dBFS")
+    return ambient_dbfs - 10
 
-    return ambient_dbfs - 10  # 🔥 Target silence threshold 10dB lower than ambient
+# ─── Audio Capture / Processing / Playback ───────────────────────────────────────
 
-# ─── Capture Loop ────────────────────────────────────────────────────────────────
-
-def capture_loop(input_device_index=None):
-    audio_stream = capture_audio(chunk=CHUNK_SIZE, rate=SAMPLE_RATE, input_device_index=input_device_index)
+def capture_loop():
+    audio_stream = capture_audio(chunk=CHUNK_SIZE, rate=SAMPLE_RATE, input_device_index=INPUT_DEVICE_INDEX)
     try:
         for chunk in audio_stream:
             timestamp = time.time()
             audio_queue.put((chunk, timestamp))
     except KeyboardInterrupt:
         print("\n🛑 Stopping audio capture.")
-
-# ─── Processing Loop ─────────────────────────────────────────────────────────────
 
 def processing_loop():
     buffer = bytearray()
@@ -102,7 +101,6 @@ def processing_loop():
                 first_chunk_time = timestamp
 
             current_time = time.time()
-
             buffer_duration_seconds = len(buffer) / (SAMPLE_RATE * CHANNELS * BYTES_PER_SAMPLE)
 
             silence_detected = has_enough_silence(buffer)
@@ -113,64 +111,42 @@ def processing_loop():
                     print(f"[INFO] Flushing buffer ({buffer_duration_seconds:.2f}s)...")
                     flush_buffer(buffer, timestamps)
                     first_chunk_time = None
-
                 elif buffer_duration_seconds >= MIN_ACCUMULATED_DURATION:
                     print(f"[INFO] Forcing flush of small accumulated buffer ({buffer_duration_seconds:.2f}s)...")
                     flush_buffer(buffer, timestamps)
                     first_chunk_time = None
-
                 else:
-                    print(f"[INFO] Holding small buffer ({buffer_duration_seconds:.2f}s), waiting to accumulate more...")
+                    print(f"[INFO] Holding small buffer ({buffer_duration_seconds:.2f}s), waiting...")
 
         except queue.Empty:
             print("[WARN] No new mic chunks.")
 
-# ─── Chunk Processing ────────────────────────────────────────────────────────────
-
 def flush_buffer(buffer, timestamps):
     chunk_to_process = bytes(buffer)
     timestamps_to_process = timestamps.copy()
-
     buffer.clear()
     timestamps.clear()
-
     threading.Thread(target=process_chunk, args=(chunk_to_process, timestamps_to_process)).start()
 
 def process_chunk(chunk_to_process, timestamps):
-    print("\n🛠️  Processing audio chunk…")
-
+    print("\n🛠️ Processing audio chunk...")
     if timestamps:
-        oldest_ts = timestamps[0]
-        lag_seconds = time.time() - oldest_ts
-        print(f"🕒 Current lag behind live: {lag_seconds:.2f} seconds")
+        lag_seconds = time.time() - timestamps[0]
+        print(f"🕒 Current lag: {lag_seconds:.2f}s")
 
-    raw_text = None
     try:
-        raw_text = transcribe_audio(
-            audio_chunk=chunk_to_process,
-            sample_rate=SAMPLE_RATE,
-            prompt=""
-        )
-    except Exception as e:
-        print(f"[ERROR] Transcription failed: {e}")
-
-    if raw_text:
-        print(f"[Transcript] {raw_text}")
-
-        tts_data = None
-        try:
+        raw_text = transcribe_audio(audio_chunk=chunk_to_process, sample_rate=SAMPLE_RATE, prompt="")
+        if raw_text:
+            print(f"[Transcript] {raw_text}")
             tts_data = generate_audio(raw_text)
-        except Exception as e:
-            print(f"[ERROR] TTS generation failed: {e}")
-
-        if tts_data:
-            playback_queue.put(tts_data)
+            if tts_data:
+                playback_queue.put(tts_data)
+            else:
+                print("[WARN] No TTS data generated.")
         else:
-            print("[WARN] No TTS data generated.")
-    else:
-        print("[WARN] No transcription text generated.")
-
-# ─── Playback Loop ───────────────────────────────────────────────────────────────
+            print("[WARN] No transcription text generated.")
+    except Exception as e:
+        print(f"[ERROR] Processing chunk failed: {e}")
 
 def playback_loop():
     while True:
@@ -183,39 +159,35 @@ def playback_loop():
         finally:
             playback_queue.task_done()
 
-# ─── Main Entry ──────────────────────────────────────────────────────────────────
+# ─── Main Function ───────────────────────────────────────────────────────────────
 
-def main():
-    global SILENCE_THRESH_DBFS
+def run_assistant(input_device_name, output_device_name=None):
+    """Start the assistant with specific input and output devices."""
+    global SILENCE_THRESH_DBFS, INPUT_DEVICE_INDEX, OUTPUT_DEVICE_NAME
 
-    print("🎙️ Starting real-time classroom assistant… speak into the mic (Ctrl-C to stop).")
+    print("🎙️ Starting real-time assistant…")
 
-    mic_name = "MacBook Air Microphone"
-    MACBOOK_MIC_INDEX = find_input_device(mic_name)
+    INPUT_DEVICE_INDEX = find_input_device(input_device_name)
+    if INPUT_DEVICE_INDEX is None:
+        raise RuntimeError(f"Could not find input device containing '{input_device_name}'")
 
-    if MACBOOK_MIC_INDEX is None:
-        raise RuntimeError(f"Could not find input device containing '{mic_name}'")
+    OUTPUT_DEVICE_NAME = output_device_name  # Not actively used yet but reserved for playback routing later
 
-    print(f"[INFO] Using input device index {MACBOOK_MIC_INDEX} for microphone '{mic_name}'")
+    print(f"[INFO] Using input device index {INPUT_DEVICE_INDEX} ({input_device_name})")
 
-    SILENCE_THRESH_DBFS = measure_ambient_noise(MACBOOK_MIC_INDEX)
-
+    SILENCE_THRESH_DBFS = measure_ambient_noise(INPUT_DEVICE_INDEX)
     print(f"[INFO] Using adaptive silence threshold: {SILENCE_THRESH_DBFS:.2f} dBFS")
 
-    capture_thread = threading.Thread(target=capture_loop, args=(MACBOOK_MIC_INDEX,), daemon=True)
-    capture_thread.start()
-
-    processing_thread = threading.Thread(target=processing_loop, daemon=True)
-    processing_thread.start()
-
-    playback_thread = threading.Thread(target=playback_loop, daemon=True)
-    playback_thread.start()
+    threading.Thread(target=capture_loop, daemon=True).start()
+    threading.Thread(target=processing_loop, daemon=True).start()
+    threading.Thread(target=playback_loop, daemon=True).start()
 
     try:
         while True:
             time.sleep(1)
     except KeyboardInterrupt:
-        print("\n🛑 Stopping assistant.")
+        print("\n🛑 Assistant stopped manually.")
 
+# Compatibility for local testing
 if __name__ == "__main__":
-    main()
+    run_assistant("MacBook Air Microphone")

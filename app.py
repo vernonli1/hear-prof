@@ -1,23 +1,23 @@
 import streamlit as st
-import threading
-from assistant_backend import start_assistant, current_transcript
-from streamlit_autorefresh import st_autorefresh
+import pymongo
+from dotenv import load_dotenv
+import os
+import sys
 
-st.title("🎙️ Real-Time Classroom Assistant")
+st.set_page_config(
+    page_title="HearSay - Real-Time AI Assistant",
+    page_icon="🦻",
+    layout="wide"
+)
 
-if "assistant_running" not in st.session_state:
-    st.session_state.assistant_running = False
+st.image("assets/HearSay.gif")
 
-if st.button("🚀 Start Assistant") and not st.session_state.assistant_running:
-    threading.Thread(target=start_assistant, daemon=True).start()
-    st.session_state.assistant_running = True
-    st.success("Assistant started!")
+# Define Pages
+assistant_home = st.Page("pages/assistant_home.py", title="Assistant Home", icon="🎙️")
+lectures = st.Page("pages/lectures.py", title="Lectures", icon="📚")
 
-st.subheader("Live Transcription")
-transcript_area = st.empty()
+# Setup Navigation
+pg = st.navigation([assistant_home, lectures])
 
-# Autorefresh every 1000 ms
-count = st_autorefresh(interval=1000, limit=None, key="transcription_refresh")
-
-if st.session_state.assistant_running:
-    transcript_area.markdown(current_transcript.replace("\n", "<br>"), unsafe_allow_html=True)
+# Run
+pg.run()

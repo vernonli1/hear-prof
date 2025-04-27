@@ -1,17 +1,18 @@
-# assistant_backend.py
+# Final assistant_backend.py
 
 import threading
-import time
 import queue
+import time
+import numpy as np
 import os
+import pymongo
+import pyaudio
 from dotenv import load_dotenv
-from pydub import AudioSegment, silence
-
-from audio_capture import capture_audio
-from transcription import transcribe_audio
+from groq import Groq
 from tts_generation import generate_audio
+from audio_capture import capture_audio
 from audio_playback import play_audio
-from utils.audio_devices import find_input_device
+from list_audio_devices import list_devices
 
 load_dotenv()
 
@@ -20,143 +21,151 @@ CHUNK_SIZE = 4096
 BYTES_PER_SAMPLE = 2
 CHANNELS = 1
 
-DEFAULT_SILENCE_THRESH_DBFS = -40
-MIN_SILENCE_MS = 700
-URGENT_FLUSH_SECONDS = 10
-MIN_AUDIO_DURATION_SECONDS = 1.5
-MIN_ACCUMULATED_DURATION = 2.0
+# Initialize clients
+client = Groq(api_key=os.getenv("GROQ_API_KEY"))
+MONGO_CONNECTION = os.getenv("MONGO_CONNECTION")
+mongo_client = pymongo.MongoClient(MONGO_CONNECTION)
+db = mongo_client["materials"]
+collection = db["transcripts"]
 
-# Shared Queues
+MODEL = "whisper-large-v3-turbo"
+
+# Globals
+current_transcript_lines = []
 audio_queue = queue.Queue()
 playback_queue = queue.Queue()
 
-SILENCE_THRESH_DBFS = DEFAULT_SILENCE_THRESH_DBFS
+# Configs
+speaking_threshold = 0.01  # RMS threshold for speech detection
+assistant_running_flag = threading.Event()
 
-# Shared transcript storage
-current_transcript = ""
+# --- Utilities ---
+def detect_speaking(audio_np):
+    rms = np.sqrt(np.mean(audio_np**2))
+    return rms > speaking_threshold
 
-# ─── Utility Functions ────────────────────────────────────────────────────────
+def current_volume_level():
+    # Fake value if not speaking
+    return 20 if assistant_running_flag.is_set() else 0
 
-def has_enough_silence(audio_bytes, silence_thresh=SILENCE_THRESH_DBFS, silence_len=MIN_SILENCE_MS):
-    audio = AudioSegment(
-        data=audio_bytes,
-        sample_width=2,
-        frame_rate=SAMPLE_RATE,
-        channels=CHANNELS
-    )
-    silent_chunks = silence.detect_silence(audio, min_silence_len=silence_len, silence_thresh=silence_thresh)
-    return len(silent_chunks) > 0
+# --- Transcription ---
+def transcribe_audio_bytes(audio_bytes):
+    import tempfile
+    import wave
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmpfile:
+        with wave.open(tmpfile.name, "wb") as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2)
+            wf.setframerate(SAMPLE_RATE)
+            wf.writeframes(audio_bytes)
+    with open(tmpfile.name, "rb") as audio_file:
+        result = client.audio.transcriptions.create(
+            file=audio_file,
+            model=MODEL,
+            response_format="text",
+            temperature=0.0,
+        )
+    return result.strip()
 
-def measure_ambient_noise(input_device_index, sample_time=2):
-    p = capture_audio(chunk=CHUNK_SIZE, rate=SAMPLE_RATE, input_device_index=input_device_index)
-    buffer = bytearray()
-
-    start = time.time()
-    while time.time() - start < sample_time:
-        try:
-            buffer.extend(next(p))
-        except StopIteration:
-            break
-
-    if len(buffer) == 0:
-        return DEFAULT_SILENCE_THRESH_DBFS
-
-    audio = AudioSegment(
-        data=buffer,
-        sample_width=2,
-        frame_rate=SAMPLE_RATE,
-        channels=1
-    )
-
-    ambient_dbfs = audio.dBFS
-    return ambient_dbfs - 10
-
-# ─── Main Loops ───────────────────────────────────────────────────────────────
-
+# --- Threads ---
 def capture_loop(input_device_index=None):
-    audio_stream = capture_audio(chunk=CHUNK_SIZE, rate=SAMPLE_RATE, input_device_index=input_device_index)
-    for chunk in audio_stream:
-        timestamp = time.time()
-        audio_queue.put((chunk, timestamp))
+    mic_stream = capture_audio(chunk=CHUNK_SIZE, rate=SAMPLE_RATE, input_device_index=input_device_index)
+    for chunk in mic_stream:
+        if not assistant_running_flag.is_set():
+            break
+        audio_queue.put(chunk)
 
 def processing_loop():
     global current_transcript
     buffer = bytearray()
-    timestamps = []
-    first_chunk_time = None
+    last_flush = time.time()
 
-    while True:
+    while assistant_running_flag.is_set():
         try:
-            chunk, timestamp = audio_queue.get(timeout=5)
-            buffer += chunk
-            timestamps.append(timestamp)
+            chunk = audio_queue.get(timeout=1)
+            buffer.extend(chunk)
 
-            if first_chunk_time is None:
-                first_chunk_time = timestamp
+            audio_np = np.frombuffer(chunk, dtype=np.int16).astype(np.float32) / 32768.0
 
-            current_time = time.time()
+            duration_sec = len(buffer) / (SAMPLE_RATE * BYTES_PER_SAMPLE)
 
-            buffer_duration_seconds = len(buffer) / (SAMPLE_RATE * CHANNELS * BYTES_PER_SAMPLE)
+            if duration_sec >= 2 or (time.time() - last_flush) > 5:
+                transcript = transcribe_audio_bytes(buffer)
+                if transcript:
+                    # current_transcript += transcript + "\n"
+                    current_transcript_lines.append(transcript.strip())
+                    try:
+                        tts_audio = generate_audio(transcript)
+                        if tts_audio:
+                            playback_queue.put(tts_audio)
+                    except Exception as e:
+                        print(f"[ERROR] TTS failed: {e}")
 
-            silence_detected = has_enough_silence(buffer)
-            urgent_flush_needed = (current_time - first_chunk_time) >= URGENT_FLUSH_SECONDS
-
-            if silence_detected or urgent_flush_needed:
-                if buffer_duration_seconds >= MIN_AUDIO_DURATION_SECONDS:
-                    flush_buffer(buffer, timestamps)
-                    first_chunk_time = None
-                elif buffer_duration_seconds >= MIN_ACCUMULATED_DURATION:
-                    flush_buffer(buffer, timestamps)
-                    first_chunk_time = None
+                buffer = bytearray()
+                last_flush = time.time()
 
         except queue.Empty:
-            continue
-
-def flush_buffer(buffer, timestamps):
-    chunk_to_process = bytes(buffer)
-    timestamps_to_process = timestamps.copy()
-
-    buffer.clear()
-    timestamps.clear()
-
-    threading.Thread(target=process_chunk, args=(chunk_to_process, timestamps_to_process)).start()
-
-def process_chunk(chunk_to_process, timestamps):
-    global current_transcript
-
-    raw_text = transcribe_audio(audio_chunk=chunk_to_process, sample_rate=SAMPLE_RATE)
-
-    if raw_text:
-        current_transcript += raw_text.strip() + "\n"
-
-        tts_data = generate_audio(raw_text)
-        if tts_data:
-            playback_queue.put(tts_data)
+            pass
 
 def playback_loop():
-    while True:
-        tts_data = playback_queue.get()
+    while assistant_running_flag.is_set():
         try:
-            if tts_data:
-                play_audio(tts_data)
-        finally:
-            playback_queue.task_done()
+            audio_data = playback_queue.get(timeout=1)
+            play_audio(audio_data)
+        except queue.Empty:
+            pass
 
-# ─── Main Starter ─────────────────────────────────────────────────────────────
+# --- Main API ---
+def start_assistant(input_device_name, output_device_name):
+    assistant_running_flag.set()
 
-def start_assistant():
-    global SILENCE_THRESH_DBFS
+    # Find input device index manually
+    p = pyaudio.PyAudio()
+    input_device_index = None
+    for i in range(p.get_device_count()):
+        dev = p.get_device_info_by_index(i)
+        if dev.get('maxInputChannels') > 0 and input_device_name.lower() in dev.get('name').lower():
+            input_device_index = i
+            break
+    p.terminate()
 
-    mic_name = "MacBook Air Microphone"
-    MACBOOK_MIC_INDEX = find_input_device(mic_name)
+    if input_device_index is None:
+        raise RuntimeError(f"Could not find input device containing '{input_device_name}'")
 
-    if MACBOOK_MIC_INDEX is None:
-        raise RuntimeError(f"Could not find input device containing '{mic_name}'")
+    print(f"[INFO] Using input device index {input_device_index} ({input_device_name})")
 
-    SILENCE_THRESH_DBFS = measure_ambient_noise(MACBOOK_MIC_INDEX)
-
-    threading.Thread(target=capture_loop, args=(MACBOOK_MIC_INDEX,), daemon=True).start()
+    threading.Thread(target=capture_loop, args=(input_device_index,), daemon=True).start()
     threading.Thread(target=processing_loop, daemon=True).start()
     threading.Thread(target=playback_loop, daemon=True).start()
 
-    print("[Assistant] All threads started.")
+def stop_assistant():
+    assistant_running_flag.clear()
+
+def save_transcript_to_mongo(transcript_text):
+    try:
+        doc = {
+            "transcript": transcript_text.strip(),
+            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "voice": current_voice
+        }
+        collection.insert_one(doc)
+        return True
+    except Exception as e:
+        print(f"[ERROR] Failed to save transcript to MongoDB: {e}")
+        return False
+
+def list_audio_devices():
+    """List input and output devices separately."""
+    p = pyaudio.PyAudio()
+    input_devices = []
+    output_devices = []
+
+    for i in range(p.get_device_count()):
+        dev = p.get_device_info_by_index(i)
+        if dev.get("maxInputChannels") > 0:
+            input_devices.append(dev.get("name"))
+        if dev.get("maxOutputChannels") > 0:
+            output_devices.append(dev.get("name"))
+
+    p.terminate()
+    return input_devices, output_devices
