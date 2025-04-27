@@ -67,28 +67,27 @@ st.session_state["output_device"] = output_device
 if "assistant_running" not in st.session_state:
     st.session_state["assistant_running"] = False
 
-if st.session_state["assistant_running"]:
-    st.success("🟢 Assistant is Running...")
-else:
-    st.error("🔴 Assistant is Stopped.")
-
-# Launch / Terminate Assistant Buttons
-start_col, stop_col = st.columns(2)
+col1, col2, col3 = st.columns(3)
 
 if not st.session_state["assistant_running"]:
-    if start_col.button("🚀 Launch Assistant"):
+    if st.button("🚀 Launch Assistant"):
         threading.Thread(
             target=start_assistant,
             args=(input_device, output_device),
             daemon=True
         ).start()
         st.session_state["assistant_running"] = True
-        st.success("Assistant launched!")
+        st.rerun()
 else:
-    if stop_col.button("🛑 Terminate Assistant"):
+    if st.button("🛑 Terminate Assistant"):
         stop_assistant()
         st.session_state["assistant_running"] = False
-        st.warning("Assistant terminated.")
+        st.rerun()
+
+if st.session_state["assistant_running"]:
+    st.success("🟢 Assistant is Running...")
+else:
+    st.warning("🔴 Assistant is Stopped.")
 
 st.divider()
 
@@ -100,6 +99,7 @@ transcript_display = st.empty()
 N_BRIGHT = 2  # number of latest sentences bright
 
 if st.session_state["assistant_running"]:
+    st.success("🟢 Transcript is live.")
     while st.session_state["assistant_running"]:
         full_text = " ".join(current_transcript_lines)
 
@@ -124,7 +124,7 @@ if st.session_state["assistant_running"]:
         time.sleep(1)
 
 else:
-    transcript_display.markdown("🔴 Assistant not running.")
+    transcript_display.warning("🔴 Transcript is not live.")
 
 st.divider()
 
