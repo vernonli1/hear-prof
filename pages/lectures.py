@@ -92,6 +92,11 @@ def generate_flashcards(transcript):
         flashcards.append((question, answer))
     return flashcards
 
+def show_summary(transcript):
+    ai_summary = model.generate_content(
+        f"Summarize this lecture in 500 words in Markdown, concisely and in a fun way, using bullet points and list 3 key terms and 3 key learnings:\n\n{transcript}"
+    )
+    st.markdown(ai_summary.text)
 
 # Define a function to display items in Streamlit
 def display_items():
@@ -120,7 +125,7 @@ def display_lecture_details():
         lecture_id = params["id"]
         item = collection.find_one({"_id": ObjectId(lecture_id)})  # Fetch the item by ID
         
-        tab = st.sidebar.radio("Go to", ["Full Lesson Transcription", "Flashcards"])
+        tab = st.sidebar.radio("Go to", ["Full Lesson Transcription", "Flashcards", "Lesson Summary"])
 
         # Update URL when tab changes
         st.query_params.tab = tab.lower().replace(" ", "")
@@ -132,17 +137,18 @@ def display_lecture_details():
         if tab == "Flashcards":
             # Example: Generate simple flashcards
             show_flashcards(item['transcript'])
-        elif tab == "AI Office Hours":
-            st.write("🧠 AI Summary (Placeholder)")
-            # Example: Summarize first 300 characters
-            st.write(item['text'][:300] + "...")
+        elif tab == "Lesson Summary":
+            st.title(f"Lesson Summary: {item['name']}")
+            show_summary(item['transcript'])
 
-        if item:
+        if item and tab != "Lesson Summary":
             st.title(f"Lecture: {item['name']}")
             st.write(f"**Time:** {item['timestamp']}")
             st.write(f"**Transcript:** {item['transcript']}")
-        else:
+        elif not item:
             st.error("Lecture not found.")
+        else:
+            pass
     else:
         st.error("No lecture ID provided.")
 
