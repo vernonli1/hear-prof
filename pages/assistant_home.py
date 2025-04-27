@@ -7,7 +7,10 @@ from assistant_backend import (
     stop_assistant,
     current_transcript_lines,
     save_transcript_to_mongo,
-    list_audio_devices
+    list_audio_devices,
+    summarize_image,
+    image_summaries,
+    uploaded_images
 )
 
 from groq import Groq
@@ -139,6 +142,26 @@ else:
 
 st.divider()
 
+# Upload and Summarize Lecture Images
+st.subheader("🖼️ Upload Lecture Images for Summarization")
+
+uploaded_files = st.file_uploader(
+    "Upload lecture slides / images (PNG, JPG, JPEG)",
+    type=["png", "jpg", "jpeg"],
+    accept_multiple_files=True
+)
+
+if uploaded_files:
+    for uploaded_file in uploaded_files:
+        if st.button(f"Summarize {uploaded_file.name}"):
+            with st.spinner(f"Analyzing {uploaded_file.name}..."):
+                description = summarize_image(uploaded_file)
+                image_summaries.append(description)
+                uploaded_images.append(uploaded_file)
+            st.success(f"✅ Image {uploaded_file.name} summarized and added!")
+
+st.divider()
+
 # Smart Lecture Name Generation
 def generate_title_from_transcript(transcript_text):
     try:
@@ -165,12 +188,10 @@ if current_transcript_lines:
     first_sentence = current_transcript_lines[0]
     quick_suggested_name = " ".join(first_sentence.split()[:5]) + "..." if len(first_sentence.split()) > 5 else first_sentence
 
-    # Also generate a smarter title using Groq
     if st.button("🎯 Suggest Better Lecture Title"):
         smart_suggested_title = generate_title_from_transcript(full_transcript_text)
         st.session_state["smart_suggested_title"] = smart_suggested_title
 
-    # Check if already suggested
     suggested_name = st.session_state.get("smart_suggested_title", quick_suggested_name)
 
     lecture_name = st.text_input("Enter Lecture Name 📝", value=suggested_name, placeholder="e.g., Introduction to Biology")
@@ -182,9 +203,9 @@ if current_transcript_lines:
             lecture_name=lecture_name
         )
         if save_success:
-            st.success("✅ Transcript saved to MongoDB!")
+            st.success("✅ Transcript and images saved to MongoDB!")
         else:
-            st.error("❌ Failed to save transcript.")
+            st.error("❌ Failed to save.")
 
 else:
     st.warning("⚠️ No transcript available to save.")

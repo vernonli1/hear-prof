@@ -86,7 +86,7 @@ def show_summary(transcript):
 # --- Display Items ---
 
 def display_items():
-    items = collection.find().sort("timestamp", -1)  # Reverse order: newest first
+    items = collection.find().sort("timestamp", -1)  # Newest first
     st.title("📚 Lecture Notes")
 
     for item in items:
@@ -125,7 +125,17 @@ def display_lecture_details():
         if tab == "Full Transcription":
             st.title(f"📖 {item['name']}")
             st.write(f"**🕒 Time:** {item['timestamp']}")
-            st.write(f"**📝 Transcript:** {item['transcript']}")
+            st.write("### 📝 Full Transcript:")
+            st.write(item['transcript'])
+
+            if 'uploaded_images_base64' in item and item['uploaded_images_base64']:
+                st.divider()
+                st.subheader("🖼️ Uploaded Lecture Images")
+
+                for idx, (img_b64, summary) in enumerate(zip(item['uploaded_images_base64'], item.get('image_summaries', [])), start=1):
+                    st.image(f"data:image/png;base64,{img_b64}", caption=f"Lecture Image {idx}", use_column_width=True)
+                    st.markdown(f"**Summary for Image {idx}:** {summary}")
+
 
         elif tab == "Flashcards":
             st.title(f"🎴 Flashcards for {item['name']}")

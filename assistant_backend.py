@@ -5,8 +5,6 @@ import queue
 import time
 import numpy as np
 import os
-import warnings
-warnings.filterwarnings("ignore", message="missing ScriptRunContext!")
 import pymongo
 import pyaudio
 import streamlit as st
@@ -43,6 +41,8 @@ MODEL = "whisper-large-v3-turbo"
 
 # Globals
 current_transcript_lines = []
+uploaded_images = []  # Stores uploaded images (as PIL objects or file buffers)
+image_summaries = []  # Stores generated image summaries
 audio_queue = queue.Queue()
 playback_queue = queue.Queue()
 
@@ -167,13 +167,23 @@ def start_assistant(input_device_name, output_device_name):
 def stop_assistant():
     assistant_running_flag.clear()
 
+import base64
+
 def save_transcript_to_mongo(transcript_text, chosen_voice="Unknown", lecture_name="Unnamed"):
     try:
+        # Encode uploaded images to base64
+        images_base64 = []
+        for uploaded_file in uploaded_images:
+            uploaded_file.seek(0)  # rewind file
+            images_base64.append(base64.b64encode(uploaded_file.read()).decode('utf-8'))
+
         doc = {
             "name": lecture_name,
             "transcript": transcript_text.strip(),
             "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-            "voice": chosen_voice
+            "voice": chosen_voice,
+            "image_summaries": image_summaries.copy(),  # summaries
+            "uploaded_images_base64": images_base64     # base64 images
         }
         collection.insert_one(doc)
         return True
@@ -196,3 +206,44 @@ def list_audio_devices():
 
     p.terminate()
     return input_devices, output_devices
+
+
+def summarize_image(uploaded_file, prompt="Describe the lecture slide in academic style."):
+    import base64
+    from PIL import Image
+    import io
+
+    # Load API Key separately if needed
+    groq_client_vision = Groq(api_key=os.getenv("GROQ_API_KEY"))
+
+    # Open and resize image if needed
+    image = Image.open(uploaded_file)
+    max_dimension = max(image.size)
+    if max_dimension > 1024:
+        scale = 1024 / max_dimension
+        new_size = (int(image.size[0] * scale), int(image.size[1] * scale))
+        image = image.resize(new_size)
+
+    buffered = io.BytesIO()
+    image.save(buffered, format="PNG")
+    base64_image = base64.b64encode(buffered.getvalue()).decode('utf-8')
+    file_type = "image/png"
+
+    # Vision API call
+    response = groq_client_vision.chat.completions.create(
+        model="meta-llama/llama-4-scout-17b-16e-instruct",
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {"type": "image_url", "image_url": {"url": f"data:{file_type};base64,{base64_image}"}},
+                ],
+            }
+        ],
+        temperature=0.2,
+        max_tokens=800,
+        stream=False,
+    )
+
+    return response.choices[0].message.content.strip()
