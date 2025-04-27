@@ -24,9 +24,7 @@ except pymongo.errors.ConfigurationError:
     print("An Invalid URI host error was received. Is your Atlas host name correct in your connection string?")
     sys.exit(1)
 
-
-st.markdown("# Transcribe 🎈")
-st.sidebar.header("Transcribe 🎈")
+st.sidebar.header("Understand your Classes!")
 
 # Set up Groq
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")  # Ensure this environment variable is set
@@ -39,7 +37,7 @@ if "transcription_sessions" not in st.session_state:
 if "current_session_transcription" not in st.session_state:
     st.session_state["current_session_transcription"] = ""
 
-st.title("🎙️ Real-Time Transcription with Groq")
+st.title("Real-Time Lesson Transcription")
 st.markdown("Speak into your microphone, and see the transcription below:")
 
 def insert_document_into_mongo(doc):

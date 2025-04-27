@@ -6,16 +6,16 @@ import os
 import re
 import json
 from bson import ObjectId
-import google.generativeai as genai
+from groq import Groq
 from dotenv import load_dotenv
 
 # Load API key securely
 load_dotenv()
-api_key = os.getenv("GEMINI_API_KEY")
+api_key = os.getenv("GROQ_API_KEY")
 
 # Configure Gemini
-genai.configure(api_key=api_key)
-model = genai.GenerativeModel('gemini-1.5-flash')
+groq_client = Groq(api_key=api_key)
+MODEL_NAME = "llama-3.3-70b-versatile"
 
 load_dotenv()
 
@@ -33,7 +33,7 @@ except pymongo.errors.ConfigurationError:
 
 def show_flashcards(text):
     # Flashcard Button
-    if st.button("🔮 Refresh Flashcards"):
+    if st.button("🔮 Get Flashcards"):
         with st.spinner('Generating flashcards...'):
             flashcards = generate_flashcards(text)
             # Save into Session State
@@ -46,43 +46,41 @@ def show_flashcards(text):
     if 'flashcards' in st.session_state:
         flashcards = st.session_state['flashcards']
         index = st.session_state['index']
-        show_answer = st.session_state['show_answer']
+        show_answer = st.session_state.get('show_answer', False)
 
         if flashcards:
             question, answer = flashcards[index]
-            if not show_answer:
-                st.markdown(f"### Q: {question}")
+            st.markdown(f"### Q: {question}")
+            flip_clicked = st.button("🔄 Flip")
+            if flip_clicked:
+                st.session_state['show_answer'] = not show_answer
 
-            else:
-                st.markdown(f"### A: {answer}")
+            if st.session_state['show_answer']:
+                st.markdown(f"A: {answer}")
 
             col1, col2, col3 = st.columns(3)
 
             with col1:
-                prev_clicked = st.button("⬅️ Previous")
+                if st.button("⬅️ Previous"):
+                    st.session_state['index'] = (index - 1) % len(flashcards)
+                    st.session_state['show_answer'] = False
             with col2:
-                flip_clicked = st.button("🔄 Flip")
+                pass  # Flip button above
             with col3:
-                next_clicked = st.button("➡️ Next")
-
-            if flip_clicked:
-                st.session_state['show_answer'] = not show_answer
-
-            elif next_clicked:
-                st.session_state['show_answer'] = False
-                st.session_state['index'] = (index + 1) % len(flashcards)
-
-            elif prev_clicked:
-                st.session_state['show_answer'] = False
-                st.session_state['index'] = (index - 1) % len(flashcards)
+                if st.button("➡️ Next"):
+                    st.session_state['index'] = (index + 1) % len(flashcards)
+                    st.session_state['show_answer'] = False
 
 
 def generate_flashcards(transcript):
-    flashcards_response = model.generate_content(
-        f"Create 5 flashcards (Q&A format only) from this lecture in JSON format, where the flashcards are dictionaries in a list, and the question and answer are keys, Q and A, in a dictionary:\n\n{transcript}"
+    flashcards_response = groq_client.chat.completions.create(
+        model=MODEL_NAME,
+        messages=[
+            {"role": "user", "content":  f"Create 5 flashcards (Q&A format only) from this lecture in JSON format, where the flashcards are dictionaries in a list, and the question and answer are keys, Q and A, in a dictionary:\n\n{transcript}"}
+        ]
     )
     # parse out AI response
-    flashcards_json = json.loads(re.sub(r"```(\w+)?\n?", "", flashcards_response.text))
+    flashcards_json = json.loads(re.sub(r"```(\w+)?\n?", "", flashcards_response.choices[0].message.content).strip())
 
     flashcards = []
     for card in flashcards_json:
@@ -93,10 +91,13 @@ def generate_flashcards(transcript):
     return flashcards
 
 def show_summary(transcript):
-    ai_summary = model.generate_content(
-        f"Summarize this lecture in 500 words in Markdown, concisely and in a fun way, using bullet points and list 3 key terms and 3 key learnings:\n\n{transcript}"
+    ai_summary = groq_client.chat.completions.create(
+        model=MODEL_NAME,
+        messages=[
+            {"role": "user", "content":  f"Summarize this lecture in 500 words in Markdown, concisely and in a fun way, using bullet points and list 3 key terms and 3 key learnings:\n\n{transcript}"}
+        ]
     )
-    st.markdown(ai_summary.text)
+    st.markdown(ai_summary.choices[0].message.content)
 
 # Define a function to display items in Streamlit
 def display_items():
