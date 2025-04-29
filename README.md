@@ -6,7 +6,8 @@ HearSay transcribes lectures (all kinds of speech really) in real-time and dicta
 
 We built our web app on top of Streamlit. We used OpenAI's Whisper model for Speech-To-Text, Eleven Labs for Text-To-Speech as well as performing post-processing on audio recordings using PyAudio, PyDub and other Python packages. We used Llama for OCR on visual study materials and text summarisation. We stored audio transcripts and other study materials on MongoDB Atlas. Finally, we accelerated all our AI inference using Groq.
 
-
+### Demo
+<iframe width="560" height="315" src="https://www.youtube.com/embed/PI1DPuL0iRk?si=wTvBs2bL51u9xGnd" title="YouTube video player" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" referrerpolicy="strict-origin-when-cross-origin" allowfullscreen></iframe>
 
 ### Running the App
 
