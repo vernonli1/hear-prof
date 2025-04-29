@@ -9,7 +9,7 @@ We built our web app on top of Streamlit. We used OpenAI's Whisper model for Spe
 ### Demo
 [![Watch the demo](https://img.youtube.com/vi/PI1DPuL0iRk/hqdefault.jpg)](https://www.youtube.com/embed/PI1DPuL0iRk?si=wTvBs2bL51u9xGnd)
 
-### Running the App
+### Running the App Locally
 
 #### Downloads
 Running the app locally will require the following downloads (for a Linux environment):
