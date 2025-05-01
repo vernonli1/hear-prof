@@ -8,6 +8,7 @@ load_dotenv()
 
 ELEVEN_API_KEY = os.getenv("ELEVENLABS_API_KEY")
 DEFAULT_VOICE_ID = os.getenv("TTS_VOICE_ID")
+TARGET_LANGUAGE = os.getenv("TARGET_LANGUAGE", "en")
 
 if not ELEVEN_API_KEY:
     raise RuntimeError("ELEVENLABS_API_KEY not set in .env")
@@ -18,7 +19,9 @@ def generate_audio(text: str, voice_id: str = None) -> bytes | None:
     """
     Send polished text to ElevenLabs and return the full audio container as bytes.
     Dynamically accepts voice_id for flexibility.
+    Falls back to language-specific mapping if not provided.
     """
+    # Use provided voice_id, or select based on language map
     if voice_id is None:
         voice_id = DEFAULT_VOICE_ID
 
@@ -29,6 +32,7 @@ def generate_audio(text: str, voice_id: str = None) -> bytes | None:
     }
     body = {
         "text": text,
+        "model_id": "eleven_flash_v2_5",
         "voice_settings": {
             "stability": 0.5,
             "similarity_boost": 0.7

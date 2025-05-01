@@ -13,41 +13,61 @@ client = Groq(api_key=GROQ_API_KEY)
 
 def transcribe_audio(audio_chunk: bytes,
                      sample_rate: int = 16000,
-                     prompt: str = "") -> str | None:
+                     prompt: str = "",
+                     language: str = "auto",
+                     translate: bool = False) -> str | None:
     """
-    1) Write raw PCM bytes into a real temp WAV file on disk
-    2) Open that file and pass the file handle straight into Groq SDK
-    3) Clean up and return the transcription text
+    Transcribes or translates audio using Groq's Whisper API.
+    Parameters:
+        audio_chunk (bytes): Raw PCM audio data.
+        sample_rate (int): Sampling rate of the audio.
+        prompt (str): Optional prompt to guide transcription.
+        language (str): Language code (e.g., 'en', 'es', 'fr'). Use 'auto' for auto-detection.
+        translate (bool): If True, translates audio to English using supported model.
+    Returns:
+        str | None: Transcribed or translated text.
     """
     tmp_path = None
     try:
-        # 1) Create a real temp WAV file
+        # Create a temporary WAV file
         tmp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
         tmp_path = tmp_file.name
         tmp_file.close()
 
-        # 2) Write raw mic bytes into that WAV
+        # Write audio data to the WAV file
         with wave.open(tmp_path, "wb") as wf:
             wf.setnchannels(1)             # mono
             wf.setsampwidth(2)             # 16-bit PCM
-            wf.setframerate(sample_rate)   # e.g. 16000 Hz
+            wf.setframerate(sample_rate)   # e.g., 16000 Hz
             wf.writeframes(audio_chunk)
 
-        # 3) Open the temp file and send to Groq
-        with open(tmp_path, "rb") as audio_file:
-            result = client.audio.transcriptions.create(
-                file=audio_file,                   # real file handle
-                model="whisper-large-v3-turbo",    # high-speed Whisper
-                prompt=prompt,                     # optional context hint
-                response_format="text",            # plain text response
-                temperature=0.0                    # deterministic output
-            )
+        # Select model based on translate flag
+        model_name = "whisper-large-v3" if translate else "whisper-large-v3-turbo"
 
-        # 4) Handle SDK’s response type
+        # Open the temp file and send to Groq
+        with open(tmp_path, "rb") as audio_file:
+            if translate:
+                result = client.audio.translations.create(
+                    file=audio_file,
+                    model=model_name,
+                    prompt=prompt,
+                    response_format="text",
+                    temperature=0.0
+                )
+            else:
+                result = client.audio.transcriptions.create(
+                    file=audio_file,
+                    model=model_name,
+                    prompt=prompt,
+                    response_format="text",
+                    temperature=0.0,
+                    language=None if language == "auto" else language
+                )
+
+        # Handle the response
         if isinstance(result, str):
             return result.strip()
         else:
-            # if you switch to JSON output later, .text will exist
             return getattr(result, "text", str(result)).strip()
 
     except Exception as e:
@@ -55,6 +75,5 @@ def transcribe_audio(audio_chunk: bytes,
         return None
 
     finally:
-        # 5) Clean up the temp file
         if tmp_path and os.path.exists(tmp_path):
             os.remove(tmp_path)
